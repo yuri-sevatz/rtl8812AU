@@ -1,11 +1,19 @@
 EXTRA_CFLAGS += $(USER_EXTRA_CFLAGS)
 EXTRA_CFLAGS += -O1
 #EXTRA_CFLAGS += -O3
-#EXTRA_CFLAGS += -Wall
-#EXTRA_CFLAGS += -Wextra
+EXTRA_CFLAGS += -Wall
+EXTRA_CFLAGS += -Wextra
 #EXTRA_CFLAGS += -Werror
 #EXTRA_CFLAGS += -pedantic
 #EXTRA_CFLAGS += -Wshadow -Wpointer-arith -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes
+
+# The "$(call cc-option,-Wxxx)" macro only includes that option when it's
+# supported by the compiler used. It may only work on Debian systems.
+
+# Wdate-time was added in gcc-4.9
+EXTRA_CFLAGS += $(call cc-option,-Werror=date-time)
+# Wincompatible-pointer-types was added in gcc-5.0
+EXTRA_CFLAGS += $(call cc-option,-Werror=incompatible-pointer-types)
 
 EXTRA_CFLAGS += -Wno-unused-variable
 EXTRA_CFLAGS += -Wno-unused-value
@@ -15,6 +23,10 @@ EXTRA_CFLAGS += -Wno-unused-function
 EXTRA_CFLAGS += -Wno-unused
 #EXTRA_CFLAGS += -Wno-uninitialized
 #EXTRA_CFLAGS += -Wno-error=date-time	# Fix compile error on gcc 4.9 and later
+
+# Relax some warnings from '-Wextra' so we won't get flooded with warnings
+EXTRA_CFLAGS += -Wno-sign-compare
+EXTRA_CFLAGS += -Wno-missing-field-initializers
 
 EXTRA_CFLAGS += -I$(src)/include
 EXTRA_CFLAGS += -I$(src)/hal/phydm
@@ -61,7 +73,7 @@ CONFIG_REDUCE_TX_CPU_LOADING = n
 CONFIG_BR_EXT = y
 CONFIG_ANTENNA_DIVERSITY = n
 CONFIG_TDLS = n
-CONFIG_WIFI_MONITOR = n
+CONFIG_WIFI_MONITOR = y
 ######################## Wake On Lan ##########################
 CONFIG_WOWLAN = n
 CONFIG_GPIO_WAKEUP = n

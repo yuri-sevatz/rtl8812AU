@@ -756,7 +756,7 @@ void rtw_cfg80211_indicate_connect(_adapter *padapter)
 	}
 #endif //CONFIG_P2P
 
-	{
+	if (check_fwstate(pmlmepriv, WIFI_MONITOR_STATE) != _TRUE) {
 		WLAN_BSSID_EX  *pnetwork = &(padapter->mlmeextpriv.mlmext_info.network);
 		struct wlan_network *scanned = pmlmepriv->cur_network_scanned;
 
@@ -870,7 +870,11 @@ void rtw_cfg80211_indicate_disconnect(_adapter *padapter)
 			cfg80211_connect_result(padapter->pnetdev, NULL, NULL, 0, NULL, 0, 
 				WLAN_STATUS_UNSPECIFIED_FAILURE, GFP_ATOMIC/*GFP_KERNEL*/);
 		else if(pwdev->sme_state==CFG80211_SME_CONNECTED)
-			cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+			#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
+				cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, true, GFP_ATOMIC);
+			#else
+				cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+			#endif
 		//else
 			//DBG_8192C("pwdev->sme_state=%d\n", pwdev->sme_state);
 
@@ -878,14 +882,12 @@ void rtw_cfg80211_indicate_disconnect(_adapter *padapter)
 		#else
 
 		if (check_fwstate(&padapter->mlmepriv, _FW_LINKED)) {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
-			u8 locally_generated = 1;
 			DBG_871X(FUNC_ADPT_FMT" call cfg80211_disconnected\n", FUNC_ADPT_ARG(padapter));
-			cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, locally_generated, GFP_ATOMIC);
-#else
-			DBG_871X(FUNC_ADPT_FMT" call cfg80211_disconnected\n", FUNC_ADPT_ARG(padapter));
-			cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
-#endif
+			#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
+				cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, true, GFP_ATOMIC);
+			#else
+				cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+			#endif
 		} else {
 			DBG_871X(FUNC_ADPT_FMT" call cfg80211_connect_result\n", FUNC_ADPT_ARG(padapter));
 			cfg80211_connect_result(padapter->pnetdev, NULL, NULL, 0, NULL, 0, 
@@ -3629,7 +3631,6 @@ void rtw_cfg80211_indicate_sta_assoc(_adapter *padapter, u8 *pmgmt_frame, uint f
 			ie_offset = _ASOCREQ_IE_OFFSET_;
 		else // WIFI_REASSOCREQ
 			ie_offset = _REASOCREQ_IE_OFFSET_;
-
 		memset(&sinfo, 0, sizeof(sinfo));
 		sinfo.filled = 0;
 		sinfo.filled = STATION_INFO_ASSOC_REQ_IES;
@@ -3922,7 +3923,11 @@ static const struct net_device_ops rtw_cfg80211_monitor_if_ops = {
 };
 #endif
 
-static int rtw_cfg80211_add_monitor_if(_adapter *padapter, char *name, struct net_device **ndev)
+static int rtw_cfg80211_add_monitor_if(_adapter *padapter, char *name,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
+		unsigned char name_assign_type,
+#endif
+		struct net_device **ndev)
 {
 	int ret = 0;
 	struct net_device* mon_ndev = NULL;
@@ -3953,6 +3958,9 @@ static int rtw_cfg80211_add_monitor_if(_adapter *padapter, char *name, struct ne
 	mon_ndev->type = ARPHRD_IEEE80211_RADIOTAP;
 	strncpy(mon_ndev->name, name, IFNAMSIZ);
 	mon_ndev->name[IFNAMSIZ - 1] = 0;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
+	mon_ndev->name_assign_type = name_assign_type;
+#endif
 	mon_ndev->destructor = rtw_ndev_destructor;
 	
 #if (LINUX_VERSION_CODE>=KERNEL_VERSION(2,6,29))
@@ -4037,7 +4045,11 @@ static int
 		ret = -ENODEV;
 		break;
 	case NL80211_IFTYPE_MONITOR:
-		ret = rtw_cfg80211_add_monitor_if(padapter, (char *)name, &ndev);
+		ret = rtw_cfg80211_add_monitor_if(padapter, (char *)name,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
+				name_assign_type,
+#endif
+				&ndev);
 		break;
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37)) || defined(COMPAT_KERNEL_RELEASE)
@@ -4566,6 +4578,42 @@ static int	cfg80211_rtw_set_channel(struct wiphy *wiphy
 
 	return 0;
 }
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
+static int	cfg80211_rtw_set_monitor_channel(struct wiphy *wiphy, struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_channel *chan = (struct ieee80211_channel *) chandef->chan;
+	int chan_target = (u8) ieee80211_frequency_to_channel(chan->center_freq);
+	int chan_offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+	int chan_width = CHANNEL_WIDTH_20;
+	enum nl80211_channel_type channel_type = cfg80211_get_chandef_type(chandef);
+	_adapter *padapter = wiphy_to_adapter(wiphy);
+
+	switch (channel_type) {
+	case NL80211_CHAN_NO_HT:
+	case NL80211_CHAN_HT20:
+		chan_width = CHANNEL_WIDTH_20;
+		chan_offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+		break;
+	case NL80211_CHAN_HT40MINUS:
+		chan_width = CHANNEL_WIDTH_40;
+		chan_offset = HAL_PRIME_CHNL_OFFSET_UPPER;
+		break;
+	case NL80211_CHAN_HT40PLUS:
+		chan_width = CHANNEL_WIDTH_40;
+		chan_offset = HAL_PRIME_CHNL_OFFSET_LOWER;
+		break;
+	default:
+		chan_width = CHANNEL_WIDTH_20;
+		chan_offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+		break;
+	}
+
+	set_channel_bwmode(padapter, chan_target, chan_offset, chan_width);
+	DBG_871X("%s : %d", __func__, chan_target);
+	return 0;
+}
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)) */
 
 static int	cfg80211_rtw_auth(struct wiphy *wiphy, struct net_device *ndev,
 			struct cfg80211_auth_request *req)
@@ -6493,6 +6541,9 @@ static struct cfg80211_ops rtw_cfg80211_ops = {
 	#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 6, 0))
 	.set_channel = cfg80211_rtw_set_channel,
 	#endif
+	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
+	.set_monitor_channel = cfg80211_rtw_set_monitor_channel,
+	#endif
 	//.auth = cfg80211_rtw_auth,
 	//.assoc = cfg80211_rtw_assoc,	
 #endif //CONFIG_AP_MODE
@@ -6668,16 +6719,14 @@ void rtw_wdev_unregister(struct wireless_dev *wdev)
 
 	rtw_cfg80211_indicate_scan_done(adapter, _TRUE);
 
-	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
-	if (wdev->current_bss) {
-		u8 locally_generated = 1;
-		DBG_871X(FUNC_ADPT_FMT" clear current_bss by cfg80211_disconnected\n", FUNC_ADPT_ARG(adapter));
-		cfg80211_disconnected(adapter->pnetdev, 0, NULL, 0, locally_generated, GFP_ATOMIC);
-	}
-	#elif ((LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)) && (LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0))) || defined(COMPAT_KERNEL_RELEASE)	
+	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)) || defined(COMPAT_KERNEL_RELEASE)	
 	if (wdev->current_bss) {
 		DBG_871X(FUNC_ADPT_FMT" clear current_bss by cfg80211_disconnected\n", FUNC_ADPT_ARG(adapter));
-		cfg80211_disconnected(adapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
+			cfg80211_disconnected(adapter->pnetdev, 0, NULL, 0, true, GFP_ATOMIC);
+		#else
+			cfg80211_disconnected(adapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+		#endif
 	}
 	#endif
 
